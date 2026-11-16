@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>遥测 SQL 涉敏血缘核查</title>
+<style>
+  :root {
+    --bg: #f4f6f8; --card: #fff; --line: #d9dee4; --text: #1f2733;
+    --ok: #137a3f; --ok-bg: #e6f6ec; --bad: #b3261e; --bad-bg: #fdeceb;
+    --warn: #9a6200; --warn-bg: #fff4e0; --info: #0b5cad; --info-bg: #e8f1fb;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: var(--bg); color: var(--text); }
+  header { background: #16283f; color: #fff; padding: 12px 20px; display: flex;
+           align-items: center; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 12px;
+           font-weight: 600; }
+  .b-version { background: #2c4a73; color: #cfe1ff; }
+  .b-pass { background: var(--ok-bg); color: var(--ok); }
+  .b-blocked { background: var(--bad-bg); color: var(--bad); }
+  .b-error { background: var(--warn-bg); color: var(--warn); }
+  .b-none { background: #e2e6ea; color: #5a6672; }
+  main { max-width: 1180px; margin: 18px auto; padding: 0 16px 40px; display: grid; gap: 16px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+  section h2 { margin: 0 0 10px; font-size: 15px; }
+  .hint { color: #5a6672; font-size: 12.5px; margin: 4px 0 10px; }
+  .banner { padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 10px; display: none; }
+  .banner.show { display: block; }
+  .banner.warn { background: var(--warn-bg); color: var(--warn); border: 1px solid #ecd9ae; }
+  table.cat { border-collapse: collapse; width: 100%; margin-bottom: 10px; }
+  table.cat th, table.cat td { border: 1px solid var(--line); padding: 4px 6px; font-size: 13px; }
+  table.cat th { background: #f0f3f6; text-align: left; }
+  input[type=text] { font-family: var(--mono); font-size: 13px; padding: 3px 6px;
+                     border: 1px solid var(--line); border-radius: 4px; width: 100%; }
+  textarea { width: 100%; min-height: 180px; font-family: var(--mono); font-size: 13px;
+             padding: 8px; border: 1px solid var(--line); border-radius: 6px; resize: vertical; }
+  button { font-size: 13px; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--line);
+           background: #fff; cursor: pointer; }
+  button:hover { background: #f0f3f6; }
+  button.primary { background: var(--info); border-color: var(--info); color: #fff; }
+  button.primary:hover { background: #0a4f94; }
+  button.dirty { outline: 2px solid var(--warn); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .btnrow { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
+  .tname { width: 180px; }
+  .cname { width: 220px; }
+  .del { color: var(--bad); border: none; background: none; padding: 2px 6px; }
+  .small { font-size: 12px; padding: 3px 8px; }
+  .colcard { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; }
+  .colcard.sensitive { border-color: #e5b4b0; background: #fffafa; }
+  .colhead { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .colname { font-family: var(--mono); font-weight: 700; font-size: 14px; }
+  .colexpr { font-family: var(--mono); color: #5a6672; font-size: 12px; }
+  table.src { border-collapse: collapse; width: 100%; margin-top: 8px; }
+  table.src th, table.src td { border: 1px solid var(--line); padding: 3px 8px; font-size: 12.5px; }
+  table.src th { background: #f0f3f6; }
+  .via { display: inline-block; background: var(--info-bg); color: var(--info); border-radius: 8px;
+         padding: 1px 8px; font-size: 11.5px; margin: 1px 2px; }
+  .tag-sens { background: var(--bad-bg); color: var(--bad); border-radius: 8px;
+              padding: 1px 8px; font-size: 11.5px; font-weight: 700; }
+  .tag-ok { background: var(--ok-bg); color: var(--ok); border-radius: 8px;
+            padding: 1px 8px; font-size: 11.5px; }
+  .mono { font-family: var(--mono); }
+  .errlist { background: var(--warn-bg); border: 1px solid #ecd9ae; border-radius: 6px;
+             padding: 8px 12px; font-size: 13px; }
+  .stale { opacity: .45; }
+  .grid2 { display: grid; grid-template-columns: 1fr; gap: 16px; }
+  .statusline { font-size: 12.5px; color: #5a6672; }
+</style>
+</head>
+<body>
+<header>
+  <h1>遥测 SQL 涉敏血缘核查</h1>
+  <span class="badge b-version" id="versionBadge">版本 v-</span>
+  <span class="badge b-none" id="analysisBadge">未核查</span>
+  <span class="statusline" id="pollStatus"></span>
+</header>
+<main>
+  <div class="banner warn" id="staleBanner"></div>
+
+  <section>
+    <h2>① 字段目录（至多 4 张表，勾选涉敏字段）</h2>
+    <div class="hint">表名 / 列名仅支持字母、数字、下划线；名称匹配不区分大小写。涉敏字段如精确位置（precise_lat / precise_lng）、手机号等。</div>
+    <div id="catalogEditor"></div>
+    <div class="btnrow">
+      <button class="small" id="addTableBtn">+ 添加表</button>
+      <button class="small" id="loadDemoCatalogBtn">载入示例目录</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>② 待外发 SQL（单条 SELECT）</h2>
+    <div class="hint">支持：非递归 CTE、别名、星号（* / t.*）、JOIN … ON、WHERE、GROUP BY、HAVING、聚合、UNION ALL。聚合不视为脱敏。</div>
+    <textarea id="sqlEditor" spellcheck="false" placeholder="SELECT ..."></textarea>
+    <div class="btnrow">
+      <button class="small" id="loadDemoPassBtn">示例（可通过）</button>
+      <button class="small" id="loadDemoBlockedBtn">示例（涉敏被拦）</button>
+      <button id="saveBtn">保存输入</button>
+      <button class="primary" id="analyzeBtn">核查</button>
+      <button id="downloadBtn">下载 SQL</button>
+      <span class="statusline" id="actionStatus"></span>
+    </div>
+  </section>
+
+  <section id="resultSection" style="display:none">
+    <h2>③ 核查结论 <span class="statusline" id="resultMeta"></span></h2>
+    <div id="resultBody"></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const ui = { version: null, resultVersion: null, dirty: false, tables: [] };
+
+const $ = (id) => document.getElementById(id);
+
+async function api(method, url, body) {
+  const opt = { method, headers: {} };
+  if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  const resp = await fetch(url, opt);
+  let data = null;
+  try { data = await resp.json(); } catch (e) { /* 非 JSON */ }
+  return { ok: resp.ok, status: resp.status, data };
+}
+
+function setDirty() {
+  ui.dirty = true;
+  $("saveBtn").classList.add("dirty");
+}
+function clearDirty() {
+  ui.dirty = false;
+  $("saveBtn").classList.remove("dirty");
+}
+
+/* ---------- 目录编辑器 ---------- */
+function renderCatalog() {
+  const root = $("catalogEditor");
+  root.innerHTML = "";
+  ui.tables.forEach((t, ti) => {
+    const tbl = document.createElement("table");
+    tbl.className = "cat";
+    const head = document.createElement("tr");
+    head.innerHTML = `<th colspan="3">表 ${ti + 1}：
+      <input type="text" class="tname" style="display:inline-block;width:200px" value="${escapeHtml(t.name)}" placeholder="表名">
+      <button class="del small">删除表</button></th>`;
+    head.querySelector("input").addEventListener("input", (e) => { t.name = e.target.value; setDirty(); });
+    head.querySelector(".del").addEventListener("click", () => { ui.tables.splice(ti, 1); setDirty(); renderCatalog(); });
+    tbl.appendChild(head);
+    const sub = document.createElement("tr");
+    sub.innerHTML = `<td class="cname"><b>列名</b></td><td><b>涉敏</b></td><td></td>`;
+    tbl.appendChild(sub);
+    t.columns.forEach((c, ci) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td><input type="text" class="cname" value="${escapeHtml(c.name)}" placeholder="列名"></td>
+        <td style="text-align:center"><input type="checkbox" ${c.sensitive ? "checked" : ""}></td>
+        <td><button class="del small">删除</button></td>`;
+      tr.querySelector(".cname").addEventListener("input", (e) => { c.name = e.target.value; setDirty(); });
+      tr.querySelector("input[type=checkbox]").addEventListener("change", (e) => { c.sensitive = e.target.checked; setDirty(); });
+      tr.querySelector(".del").addEventListener("click", () => { t.columns.splice(ci, 1); setDirty(); renderCatalog(); });
+      tbl.appendChild(tr);
+    });
+    const addRow = document.createElement("tr");
+    addRow.innerHTML = `<td colspan="3"><button class="small">+ 添加列</button></td>`;
+    addRow.querySelector("button").addEventListener("click", () => { t.columns.push({ name: "", sensitive: false }); setDirty(); renderCatalog(); });
+    tbl.appendChild(addRow);
+    root.appendChild(tbl);
+  });
+  $("addTableBtn").disabled = ui.tables.length >= 4;
+}
+
+function collectInput() {
+  return {
+    catalog: { tables: ui.tables.map(t => ({ name: t.name.trim(), columns: t.columns.map(c => ({ name: c.name.trim(), sensitive: !!c.sensitive })) })) },
+    sql: $("sqlEditor").value
+  };
+}
+
+function adoptState(state) {
+  ui.version = state.version;
+  ui.tables = state.catalog.tables.map(t => ({ name: t.name, columns: t.columns.map(c => ({ name: c.name, sensitive: c.sensitive })) }));
+  $("sqlEditor").value = state.sql;
+  renderCatalog();
+  updateBadges(state);
+}
+
+function updateBadges(state) {
+  $("versionBadge").textContent = "版本 v" + state.version;
+  const b = $("analysisBadge");
+  if (state.analysis) {
+    const s = state.analysis.status;
+    b.textContent = s === "pass" ? "核查通过（当前输入）" : s === "blocked" ? "涉敏拦截（当前输入）" : "核查报错（当前输入）";
+    b.className = "badge " + (s === "pass" ? "b-pass" : s === "blocked" ? "b-blocked" : "b-error");
+  } else {
+    b.textContent = "当前输入无有效结论";
+    b.className = "badge b-none";
+  }
+}
+
+/* ---------- 操作 ---------- */
+async function saveInput(silent) {
+  const r = await api("PUT", "/api/input", collectInput());
+  if (!r.ok) {
+    const msg = (r.data && r.data.detail) ? (Array.isArray(r.data.detail) ? r.data.detail.join("；") : r.data.detail) : ("保存失败 HTTP " + r.status);
+    setAction("保存失败：" + msg, true);
+    return null;
+  }
+  clearDirty();
+  ui.version = r.data.version;
+  updateBadges(r.data.state);
+  $("staleBanner").classList.remove("show");
+  if (r.data.changed) {
+    markResultStale();
+    if (!silent) setAction("已保存，输入有变更（v" + r.data.version + "），旧核查结论已失效，请重新核查", false);
+  } else if (!silent) {
+    setAction("已保存（内容无变化，版本不变）", false);
+  }
+  return r.data;
+}
+
+async function analyze() {
+  const saved = await saveInput(true);
+  if (!saved) return;
+  setAction("核查中…", false);
+  const r = await api("POST", "/api/analyze");
+  if (!r.ok) { setAction("核查请求失败 HTTP " + r.status, true); return; }
+  ui.resultVersion = r.data.version;
+  renderResult(r.data);
+  setAction("核查完成（绑定版本 v" + r.data.version + "）", false);
+  const st = await api("GET", "/api/state");
+  if (st.ok) updateBadges(st.data);
+}
+
+async function download() {
+  const resp = await fetch("/api/download");
+  if (!resp.ok) {
+    let msg = "HTTP " + resp.status;
+    try { const d = await resp.json(); msg = d.detail || msg; } catch (e) {}
+    setAction("禁止下载：" + msg, true);
+    return;
+  }
+  const blob = await resp.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "telemetry_query.sql";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+  setAction("已下载（当前输入 v" + ui.version + " 核查通过的 SQL）", false);
+}
+
+/* ---------- 结果渲染 ---------- */
+function renderResult(data) {
+  const sec = $("resultSection");
+  sec.style.display = "block";
+  const body = $("resultBody");
+  body.innerHTML = "";
+  $("resultMeta").textContent = "（绑定输入版本 v" + data.version + "）";
+  const res = data.result;
+  const banner = document.createElement("div");
+  if (res.status === "pass") {
+    banner.innerHTML = `<div class="banner show" style="display:block;background:var(--ok-bg);color:var(--ok)">✔ 未发现涉敏来源，允许下载。输出 ${res.summary.output_columns} 列。</div>`;
+  } else if (res.status === "blocked") {
+    banner.innerHTML = `<div class="banner show" style="display:block;background:var(--bad-bg);color:var(--bad)">✖ 存在涉敏来源，已阻止下载。涉敏输出列：${res.summary.sensitive_column_names.join("、")}（聚合不视为脱敏）</div>`;
+  } else {
+    banner.innerHTML = `<div class="banner show" style="display:block;background:var(--warn-bg);color:var(--warn)">⚠ 核查未通过：SQL 被拒绝，禁止下载。</div>`;
+  }
+  body.appendChild(banner);
+  if (res.errors && res.errors.length) {
+    const el = document.createElement("div");
+    el.className = "errlist";
+    el.innerHTML = "<b>拒绝原因：</b><ul>" + res.errors.map(e => `<li>${escapeHtml(e)}</li>`).join("") + "</ul>";
+    body.appendChild(el);
+  }
+  (res.columns || []).forEach((col, i) => {
+    const card = document.createElement("div");
+    card.className = "colcard" + (col.sensitive ? " sensitive" : "");
+    const agg = col.is_aggregate ? `<span class="via">含聚合（聚合不脱敏）</span>` : "";
+    const sens = col.sensitive ? `<span class="tag-sens">涉敏</span>` : `<span class="tag-ok">未涉敏</span>`;
+    let srcRows = col.sources.map(s => `
+      <tr>
+        <td class="mono">${escapeHtml(s.table)}.${escapeHtml(s.column)}</td>
+        <td>${s.sensitive ? '<span class="tag-sens">涉敏</span>' : '<span class="tag-ok">普通</span>'}</td>
+        <td>${s.via.map(v => `<span class="via">${escapeHtml(v)}</span>`).join("")}</td>
+      </tr>`).join("");
+    if (!col.sources.length) srcRows = `<tr><td colspan="3" class="statusline">无字段来源（常量 / COUNT(*) 等）</td></tr>`;
+    card.innerHTML = `
+      <div class="colhead">
+        <span class="statusline">输出列 ${i + 1}</span>
+        <span class="colname">${escapeHtml(col.name)}</span>
+        <span class="colexpr">${escapeHtml(col.expression)}</span>
+        ${agg}${sens}
+      </div>
+      <table class="src">
+        <tr><th style="width:32%">原始来源（基表字段）</th><th style="width:12%">标记</th><th>影响路径</th></tr>
+        ${srcRows}
+      </table>`;
+    body.appendChild(card);
+  });
+}
+
+function markResultStale() {
+  const sec = $("resultSection");
+  if (sec.style.display !== "none") {
+    sec.classList.add("stale");
+    $("resultMeta").textContent = "（输入已变更，此结论已失效，请重新核查）";
+  }
+}
+
+function setAction(msg, isErr) {
+  const el = $("actionStatus");
+  el.textContent = msg;
+  el.style.color = isErr ? "var(--bad)" : "var(--ok)";
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+/* ---------- 轮询：发现其他窗口的变更 ---------- */
+async function poll() {
+  const r = await api("GET", "/api/state");
+  if (!r.ok) { $("pollStatus").textContent = "状态同步失败"; return; }
+  const state = r.data;
+  $("pollStatus").textContent = "已同步 " + new Date().toLocaleTimeString();
+  const banner = $("staleBanner");
+  if (ui.version !== null && state.version !== ui.version) {
+    banner.textContent = `检测到输入已在其他窗口变更（v${ui.version} → v${state.version}），旧核查结论已失效，只有当前输入核查通过后才能下载。`;
+    banner.classList.add("show");
+    if (!ui.dirty) { adoptState(state); clearDirty(); }
+    else { ui.version = state.version; updateBadges(state); }
+    markResultStale();
+  } else {
+    // 横幅一旦弹出保持到用户重新保存/核查，避免轮询来回闪烁
+    updateBadges(state);
+  }
+}
+
+/* ---------- 示例 ---------- */
+const DEMO_CATALOG = [
+  { name: "events", columns: [
+    { name: "event_id", sensitive: false }, { name: "device_id", sensitive: false },
+    { name: "ts", sensitive: false }, { name: "event_type", sensitive: false },
+    { name: "precise_lat", sensitive: true }, { name: "precise_lng", sensitive: true },
+    { name: "speed", sensitive: false } ] },
+  { name: "devices", columns: [
+    { name: "device_id", sensitive: false }, { name: "model", sensitive: false },
+    { name: "owner_id", sensitive: false }, { name: "home_geohash", sensitive: true } ] },
+  { name: "users", columns: [
+    { name: "owner_id", sensitive: false }, { name: "name", sensitive: false },
+    { name: "phone", sensitive: true }, { name: "city", sensitive: false } ] },
+  { name: "regions", columns: [
+    { name: "region_code", sensitive: false }, { name: "region_name", sensitive: false } ] }
+];
+const DEMO_SQL_PASS =
+`WITH hourly AS (
+  SELECT device_id,
+         strftime('%Y-%m-%d %H:00', ts) AS hour,
+         COUNT(*) AS cnt
+  FROM events
+  WHERE event_type = 'upload'
+  GROUP BY device_id, hour
+)
+SELECT h.device_id, d.model, h.hour, h.cnt
+FROM hourly h
+JOIN devices d ON d.device_id = h.device_id
+ORDER BY h.device_id, h.hour`;
+const DEMO_SQL_BLOCKED =
+`SELECT device_id, AVG(speed) AS avg_speed, COUNT(*) AS cnt
+FROM events
+WHERE precise_lat > 30 AND precise_lng < 120
+GROUP BY device_id`;
+
+$("addTableBtn").addEventListener("click", () => {
+  if (ui.tables.length < 4) { ui.tables.push({ name: "", columns: [{ name: "", sensitive: false }] }); setDirty(); renderCatalog(); }
+});
+$("loadDemoCatalogBtn").addEventListener("click", () => {
+  ui.tables = JSON.parse(JSON.stringify(DEMO_CATALOG)); setDirty(); renderCatalog();
+});
+$("loadDemoPassBtn").addEventListener("click", () => { $("sqlEditor").value = DEMO_SQL_PASS; setDirty(); });
+$("loadDemoBlockedBtn").addEventListener("click", () => { $("sqlEditor").value = DEMO_SQL_BLOCKED; setDirty(); });
+$("saveBtn").addEventListener("click", () => saveInput(false));
+$("analyzeBtn").addEventListener("click", analyze);
+$("downloadBtn").addEventListener("click", download);
+$("sqlEditor").addEventListener("input", setDirty);
+
+(async function init() {
+  const r = await api("GET", "/api/state");
+  if (r.ok) { adoptState(r.data); clearDirty(); }
+  setInterval(poll, 3000);
+})();
+</script>
+</body>
+</html>
